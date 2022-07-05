@@ -1,2 +1,2 @@
 # marlowe-hydra-poc
-Run Marlowe on hydra head
+Run marlowe contracts on a hydra head
