@@ -12,4 +12,4 @@ We plan to extend `marlowe-cli` for setting up the Marlowe contracts and interac
 
 ## Delivery
 
-The delivery is a demo of how to run a specific Marlowe contract on Hydra. 
+The delivery is a demo of how to run a specific Marlowe contract on Hydra.
