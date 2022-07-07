@@ -14,7 +14,7 @@ version:            0.1.0.0
 -- The license under which the package is released.
 -- license:
 author:             Tomasz Rybarczyk
-maintainer:         paluho@gmail.com
+maintainer:         tomasz.rybarczyk@iohk.io yves.hauser@iohk.io pablo.lameja-seijas@iohk.io
 
 -- A copyright notice.
 -- copyright:
@@ -29,8 +29,27 @@ executable marlowe-hydra-poc
     -- Modules included in this executable, other than Main.
     -- other-modules:
 
-    -- LANGUAGE extensions used by modules in this package.
-    -- other-extensions:
-    build-depends:    base ^>=4.15.1.0
+    other-extensions:
+      DataKinds
+      FlexibleContexts
+      LambdaCase
+      NamedFieldPuns
+      NumericUnderscores
+      OverloadedStrings
+      RankNTypes
+      RecordWildCards
+      ScopedTypeVariables
+      TupleSections
+      TypeApplications
+
+    build-depends:
+        base ^>=4.14.3.0
+      , hydra-node
+      , marlowe
+      , marlowe-cli
+      , marlowe-contracts
+      , marlowe-actus
+
+
     hs-source-dirs:   app
     default-language: Haskell2010

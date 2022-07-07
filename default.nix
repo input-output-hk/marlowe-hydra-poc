@@ -22,7 +22,7 @@ let
 in
 pkgs.haskell-nix.project {
   src = pkgs.haskell-nix.haskellLib.cleanGit {
-    name = "hydra-poc";
+    name = "marlowe-hydra-poc";
     src = ./.;
   };
   projectFileName = "cabal.project";

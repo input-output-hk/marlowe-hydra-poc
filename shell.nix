@@ -49,7 +49,6 @@ let
     pkgs.pkgconfig
     pkgs.haskellPackages.hspec-discover
     pkgs.haskellPackages.cabal-plan
-    pkgs.breakpointHook
     # For validating JSON instances against a pre-defined schema
     pkgs.python3Packages.jsonschema
     # For plotting results of hydra-cluster benchmarks
@@ -89,15 +88,7 @@ let
     # NOTE: Explicit list of local packages as hoogle would not work otherwise.
     # Make sure these are consistent with the packages in cabal.project.
     packages = ps: with ps; [
-      hydra-cluster
-      hydra-node
-      hydra-plutus
-      hydra-prelude
-      hydra-test-utils
-      hydra-tui
-      hydra-cardano-api
-      plutus-cbor
-      plutus-merkle-tree
+      marlowe-hydra-poc
     ];
 
     tools = buildTools // devTools;
