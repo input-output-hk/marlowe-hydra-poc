@@ -14,3 +14,4 @@ coin = MS.Token "" "coin"
 main :: IO ()
 main = do
   putStrLn $ show $ C.swap partyA MS.ada (MS.Constant 1) (POSIXTime 10) partyB coin (MS.Constant 10) (POSIXTime 10) MS.Close
+

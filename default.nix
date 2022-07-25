@@ -8,7 +8,8 @@
     (builtins.fetchTarball
       "https://github.com/input-output-hk/iohk-nix/archive/62d853d3216083ecadc8e7f192498bebad4eee76.tar.gz")
     { }
-, nixpkgsSrc ? haskellNix.sources.nixpkgs-2111
+  # nixpkgs-unstable as also used by cardano-node, cardano-ledger et al
+, nixpkgsSrc ? builtins.fetchTarball "https://github.com/NixOS/nixpkgs/archive/1882c6b7368fd284ad01b0a5b5601ef136321292.tar.gz"
 , nixpkgsArgs ? haskellNix.nixpkgsArgs
 }:
 let
@@ -37,8 +38,12 @@ pkgs.haskell-nix.project {
       };
 
       # Broken due to haddock errors. Refer to https://github.com/input-output-hk/plutus/blob/master/nix/pkgs/haskell/haskell.nix
+      hydra-plutus.doHaddock = false;
       plutus-ledger.doHaddock = false;
-      plutus-use-cases.doHaddock = false;
+      cardano-wallet-core.doHaddock= false;
+      # marlowe-cli.doHaddock= false;
+      marlowe-actus.doHaddock= false;
+      marlowe.doHaddock = false;
     };
 
     # https://github.com/input-output-hk/cardano-wallet/commit/ced95e1b84ce8d9faa53268be45e96701ccc16e9
