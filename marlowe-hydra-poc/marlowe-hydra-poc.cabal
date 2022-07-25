@@ -45,9 +45,9 @@ executable marlowe-hydra-poc
     build-depends:
         base ^>=4.14.3.0
       , hydra-node
-      -- , marlowe
+      , marlowe
       -- , marlowe-cli
-      -- , marlowe-contracts
+      , marlowe-contracts
       -- , marlowe-actus
 
 

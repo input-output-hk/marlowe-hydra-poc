@@ -3,7 +3,7 @@
 # (see 'default.nix').
 { compiler ? "ghc8107"
   # nixpkgs 21.11
-, pkgs ? import (builtins.fetchTarball "https://github.com/NixOS/nixpkgs/archive/a7ecde854aee5c4c7cd6177f54a99d2c1ff28a31.tar.gz") { }
+, pkgs ? import (builtins.fetchTarball "https://github.com/NixOS/nixpkgs/archive/1882c6b7368fd284ad01b0a5b5601ef136321292.tar.gz") { }
 
 , hsPkgs ? import ./default.nix { }
 

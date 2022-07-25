@@ -42,6 +42,7 @@ pkgs.haskell-nix.project {
       plutus-ledger.doHaddock = false;
       cardano-wallet-core.doHaddock= false;
       # marlowe-cli.doHaddock= false;
+      plutus-script-utils.doHaddock = false;
       marlowe-actus.doHaddock= false;
       marlowe.doHaddock = false;
     };
