@@ -13,3 +13,14 @@ We plan to extend `marlowe-cli` for setting up the Marlowe contracts and interac
 ## Delivery
 
 The delivery is a demo of how to run a specific Marlowe contract on Hydra.
+
+## Development
+
+We expose three versions of developer shells which are pretty self explanatory:
+
+  * `$ nix-shell -A exes-only`
+
+  * `$ nix-shell -A cabal-only`
+
+  * `$ nix-shell -A cabal-with-exes`
+

@@ -80,6 +80,7 @@ let
       # hydra-cluster
       hydra-node
       marlowe
+      marlowe-cli
       marlowe-contracts
       # hydra-plutus
       # hydra-prelude
@@ -106,8 +107,7 @@ let
     GIT_SSL_CAINFO = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
   };
 
-  # A "cabal-only" shell which does not use haskell.nix
-  cabalShell = pkgs.mkShell {
+  cabalShellBase = {
     name = "hydra-node-cabal-shell";
 
     buildInputs = libs ++ [
@@ -129,17 +129,23 @@ let
     STACK_IN_NIX_SHELL = "true";
   };
 
+  exes = [
+    hsPkgs.hydra-node.components.exes.hydra-node
+    hsPkgs.marlowe-cli.components.exes.marlowe-cli
+  ];
+
+  cabal-only = pkgs.mkShell cabalShellBase;
+
+  cabal-with-exes = pkgs.mkShell (cabalShellBase // { buildInputs = cabalShellBase.buildInputs ++ exes; });
+
   # A shell which does provide hydra-node and hydra-cluster executables.
   exeShell = pkgs.mkShell {
-    name = "hydra-node-exe-shell";
-
-    buildInputs = [
-      hsPkgs.hydra-node.components.exes.hydra-node
-      hsPkgs.hydra-cluster.components.exes.hydra-cluster
-    ];
+    name = "hydra-node-exes-only-shell";
+    buildInputs = exes;
   };
 in
 haskellNixShell // {
-  cabalOnly = cabalShell;
-  exes = exeShell;
+  cabal-only = cabal-only;
+  cabal-with-exes = cabal-with-exes;
+  exes-only = exeShell;
 }

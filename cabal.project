@@ -88,14 +88,15 @@ package plutus-core
 source-repository-package
   type: git
   location: https://github.com/input-output-hk/marlowe-cardano
-  tag: d3433f2d4acaa680785c42498aae82aecdbd7138
-  --sha256: 124962w64hvkqlwzbagqxfcpgaxfcif6b1l2qpdkylkxhpdwdihn
+  tag: 5c294f430b3fced0a1b6012632c7b65c96d92cc6
+  --sha256: 18pw7n15rq39zyywwljsakd9ccjcjmjs0xrkzxj53w56padcbf2m
   subdir:
     libs/aeson-via-serialise
     libs/base16-aeson
     libs/plutus-ledger-ada
     libs/plutus-ledger-slot
     marlowe
+    marlowe-cli
     marlowe-contracts
     marlowe-actus
 
