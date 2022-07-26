@@ -1,17 +1,17 @@
+{-# LANGUAGE OverloadedStrings #-}
 module Main where
 
-import Language.Marlowe.Core.V1.Semantics.Types as MS
-import Language.Marlowe.Core.V1.Semantics as MS
+import Language.Marlowe.Extended.V1 as ME
 import Marlowe.Contracts as C
 
-partyA, partyB :: MS.Party
-partyA = MS.Role "a"
-partyB = MS.Role "b"
+partyA, partyB :: ME.Party
+partyA = ME.Role "a"
+partyB = ME.Role "b"
 
-coin :: MS.Token
-coin = MS.Token "" "coin"
+coin :: ME.Token
+coin = ME.Token "" "coin"
 
 main :: IO ()
 main = do
-  putStrLn $ show $ C.swap partyA MS.ada (MS.Constant 1) (POSIXTime 10) partyB coin (MS.Constant 10) (POSIXTime 10) MS.Close
+  print $ C.swap partyA ME.ada (ME.Constant 1) (POSIXTime 10) partyB coin (ME.Constant 10) (POSIXTime 10) ME.Close
 

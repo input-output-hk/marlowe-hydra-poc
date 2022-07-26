@@ -3,6 +3,7 @@ index-state: 2022-04-06T00:00:00Z
 
 packages:
   marlowe-hydra-poc
+  marlowe-hydra-tui
 
 -- We never, ever, want this.
 -- write-ghc-environment-files: never
@@ -61,9 +62,9 @@ package cardano-wallet-launcher
   optimization: False
 package cardano-wallet-core-integration
   optimization: False
-package hydra-cluster
-  tests: False
-  benchmarks: False
+--package hydra-cluster
+  --tests: False
+  --benchmarks: False
 package hydra-node
   tests: False
   benchmarks: False
@@ -72,7 +73,7 @@ package hydra-plutus
   documentation: False
   -- haddock-options: "--optghc=-fplugin-opt PlutusTx.Plugin:defer-errors"
 package hydra-tui
-  tests: True
+  tests: False
 package plutus-cbor
   tests: True
   -- haddock-options: "--optghc=-fplugin-opt PlutusTx.Plugin:defer-errors"
@@ -102,9 +103,9 @@ source-repository-package
 
 source-repository-package
   type: git
-  location: https://github.com/input-output-hk/hydra-poc
-  tag: c2288db70ee64dc558570b6bccbea2ec674b6873
-  --sha256: 05fscqkc20gji6d44bpfyjwm8hdgir275a51rl0hsifsghg6bdi9
+  location: https://github.com/yveshauser/hydra-poc
+  tag: f3d6cd711dc9980125a3768f225a60dd9fb3bf96
+  --sha256: 085bwh31967yxvk4ixvch7v0y53dv7ifkgkxvbmlhvvq3wfd0rf4
   subdir:
     -- hydra-cluster
     hydra-node
