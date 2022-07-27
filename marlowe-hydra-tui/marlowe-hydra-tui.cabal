@@ -30,7 +30,13 @@ executable marlowe-hydra-tui
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
     build-depends:    base ^>=4.14.3.0
-                    , marlowe-cli -any
-                    , hydra-tui -any
+                    , aeson
+                    , bytestring
+                    , hydra-cardano-api
+                    , hydra-node
+                    , hydra-tui
+                    , marlowe
+                    , marlowe-cli
+                    , optparse-applicative
     hs-source-dirs:   app
     default-language: Haskell2010
