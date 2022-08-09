@@ -18,8 +18,8 @@ let
   cardano-node = import
     (pkgs.fetchgit {
       url = "https://github.com/input-output-hk/cardano-node";
-      rev = "1.35.0";
-      sha256 = "06arx9hv7dn3qxfy83f0b6018rxbsvh841nvfyg5w6qclm1hddj7";
+      rev = "1.35.2";
+      sha256 = "01a5qdrmsag18s2mlf8axfbrag59j2fp6xyc89pwmzgs7x77ldsr";
     })
     { };
 
@@ -46,6 +46,11 @@ let
     cardano-node.cardano-node
   ];
 
+  bootstrap-tmux = pkgs.writers.writePython3Bin
+    "bootstrap-tmux"
+    { libraries = with pkgs.python3Packages; [libtmux pyyaml]; }
+    (builtins.readFile ./bin/bootstrap-tmux.py);
+
   devInputs = if withoutDevTools then [ ] else [
     # The interactive Glasgow Haskell Compiler as a Daemon
     pkgs.haskellPackages.ghcid
@@ -61,6 +66,8 @@ let
     pkgs.yarn
     # To interact with cardano-node and testing out things
     cardano-node.cardano-cli
+    # To quickly bootstrap hydra tmux session
+    bootstrap-tmux
   ];
 
   # Haskell.nix managed tools (via hackage)
@@ -112,6 +119,12 @@ let
 
     buildInputs = libs ++ [
       pkgs.haskell.compiler.${compiler}
+
+      # Needed for bootstrap-tmux hacking
+      pkgs.python3
+      pkgs.python3Packages.libtmux
+      pkgs.python3Packages.pyyaml
+
       pkgs.cabal-install
       pkgs.pkgconfig
     ] ++ buildInputs ++ devInputs;
@@ -128,7 +141,6 @@ let
     GIT_SSL_CAINFO = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
     STACK_IN_NIX_SHELL = "true";
   };
-
   exes = [
     hsPkgs.hydra-node.components.exes.hydra-node
     hsPkgs.marlowe-cli.components.exes.marlowe-cli
