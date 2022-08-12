@@ -55,6 +55,7 @@ import Hydra.TUI.Options (Options (..))
 import Lens.Micro (Lens', lens, (%~), (.~), (?~), (^.), (^?))
 import Lens.Micro.TH (makeLensesFor)
 import qualified Language.Marlowe as M
+import qualified Language.Marlowe.Client as M
 import qualified Language.Marlowe.CLI.Types as M
 import qualified Language.Marlowe.CLI.Export as M
 import qualified Language.Marlowe.CLI.Transaction as M
