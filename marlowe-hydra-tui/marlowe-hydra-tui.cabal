@@ -25,18 +25,78 @@ executable marlowe-hydra-tui
     main-is:          Main.hs
 
     -- Modules included in this executable, other than Main.
-    -- other-modules:
+    other-modules:    TUI
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
-    build-depends:    base ^>=4.14.3.0
-                    , aeson
-                    , bytestring
-                    , hydra-cardano-api
-                    , hydra-node
-                    , hydra-tui
-                    , marlowe
-                    , marlowe-cli
-                    , optparse-applicative
+    build-depends: aeson
+                 , async
+                 , base
+                 , bytestring
+                 , brick
+                 , cardano-crypto-class
+                 , cardano-ledger-alonzo
+                 , cardano-ledger-core
+                 , cardano-ledger-shelley
+                 , cardano-ledger-shelley-ma
+                 , containers
+                 , hydra-cardano-api
+                 , hydra-node
+                 , hydra-prelude
+                 , hydra-tui
+                 , io-classes
+                 , marlowe
+                 , marlowe-cli
+                 , microlens
+                 , microlens-th
+                 , mtl
+                 , optparse-applicative
+                 , plutus-core
+                 , plutus-ledger-api
+                 , QuickCheck
+                 , text
+                 , time
+                 , vty
+                 , websockets
     hs-source-dirs:   app
     default-language: Haskell2010
+    default-extensions:
+      BangPatterns
+      BinaryLiterals
+      ConstraintKinds
+      DataKinds
+      DefaultSignatures
+      DeriveAnyClass
+      DeriveDataTypeable
+      DeriveFoldable
+      DeriveFunctor
+      DeriveGeneric
+      DeriveTraversable
+      DerivingStrategies
+      EmptyDataDecls
+      ExistentialQuantification
+      FlexibleContexts
+      FlexibleInstances
+      FunctionalDependencies
+      GADTs
+      GeneralizedNewtypeDeriving
+      InstanceSigs
+      KindSignatures
+      LambdaCase
+      MultiParamTypeClasses
+      MultiWayIf
+      NamedFieldPuns
+      NumericUnderscores
+      OverloadedStrings
+      PartialTypeSignatures
+      PatternGuards
+      RankNTypes
+      ScopedTypeVariables
+      StandaloneDeriving
+      TupleSections
+      TypeFamilies
+      TypeSynonymInstances
+      ViewPatterns
+
+    ghc-options:        -threaded -rtsopts
+
