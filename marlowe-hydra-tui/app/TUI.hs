@@ -439,29 +439,11 @@ handleNewTxEvent Client{sendInput, sk} CardanoClient{networkId} s = case s ^? he
 
     submit s' amount = do
 
-      costModel <-
-       maybe
-        (fail "Missing default cost model.")
-        pure
-        defaultCostModelParams
-
       -- construct Marlowe contract
+      -- FIXME: Change contract
       let contract = M.Close
-      let params = M.defaultMarloweParams
-      let state = M.emptyState (M.POSIXTime 0)
-      let datum = M.buildDatum contract state
-      let validator :: Either M.CliError (M.ValidatorInfo BabbageEra) = M.buildValidator
-                          params
-                          costModel
-                          networkId
-                          NoStakeAddress
 
-      v <- liftEither' (first M.unCliError validator)
-
-      -- let b = emptyTxBody
-      -- body <- makeTransactionBody b
-
-      case mkSimpleTx input (recipient, lovelaceToValue $ Lovelace amount) sk of
+      case initializeMarlowe contract input sk networkId of
         Left e -> continue $ s' & warn ("Failed to construct tx, contact @_ktorz_ on twitter: " <> show e)
         Right tx -> do
           liftIO (sendInput (NewTx tx))
