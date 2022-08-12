@@ -155,8 +155,7 @@ let
     name = "hydra-node-exes-only-shell";
     buildInputs = exes;
   };
-in
-haskellNixShell // {
+in haskellNixShell // {
   cabal-only = cabal-only;
   cabal-with-exes = cabal-with-exes;
   exes-only = exeShell;
