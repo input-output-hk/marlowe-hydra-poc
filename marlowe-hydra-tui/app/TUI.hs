@@ -1,4 +1,5 @@
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeApplications #-}
@@ -9,18 +10,18 @@ module TUI where
 
 import Hydra.Prelude hiding (State, padLeft)
 
-import Brick
-import Hydra.Cardano.Api
-import Hydra.Ledger.Cardano.Builder
 
+import Brick
 import Brick.BChan (newBChan, writeBChan)
 import Brick.Forms (Form, FormFieldState, checkboxField, editShowableFieldWithValidate, focusedFormInputAttr, formState, handleFormEvent, invalidFields, invalidFormInputAttr, newForm, radioField, renderForm)
 import Brick.Widgets.Border (hBorder, vBorder)
 import Brick.Widgets.Border.Style (ascii)
 import qualified Cardano.Api.UTxO as UTxO
+import Control.Monad.Class.MonadThrow (throwM)
 import Control.Monad.Except
+import Control.Error.Util (hush, note)
 import Data.Bifunctor
-import Data.List (nub, (\\))
+import Data.List (nub, (\\), groupBy)
 import qualified Data.Map.Strict as Map
 import qualified Data.Text as Text
 import Data.Time (defaultTimeLocale, formatTime)
@@ -40,6 +41,7 @@ import Graphics.Vty (
  )
 import qualified Graphics.Vty as Vty
 import Graphics.Vty.Attributes (defAttr)
+import Hydra.Cardano.Api as H
 import Hydra.Chain.CardanoClient (CardanoClient (..), mkCardanoClient)
 import Hydra.Chain.Direct.Util (isMarkedOutput)
 import Hydra.Client (Client (..), HydraEvent (..), withClient)
@@ -47,6 +49,7 @@ import Hydra.ClientInput (ClientInput (..))
 import Hydra.ContestationPeriod (ContestationPeriod (UnsafeContestationPeriod))
 import Hydra.Ledger (IsTx (..))
 import Hydra.Ledger.Cardano (mkSimpleTx)
+import Hydra.Ledger.Cardano.Builder
 import Hydra.Network (Host (..))
 import Hydra.Party (Party (..))
 import Hydra.ServerOutput (ServerOutput (..))
@@ -55,17 +58,24 @@ import Hydra.TUI.Options (Options (..))
 import Lens.Micro (Lens', lens, (%~), (.~), (?~), (^.), (^?))
 import Lens.Micro.TH (makeLensesFor)
 import qualified Language.Marlowe as M
+import qualified Language.Marlowe.Scripts as M
+import qualified Language.Marlowe.Extended.V1 as M (ada)
 import qualified Language.Marlowe.Client as M
 import qualified Language.Marlowe.CLI.Types as M
 import qualified Language.Marlowe.CLI.Export as M
 import qualified Language.Marlowe.CLI.Transaction as M
-import qualified Prelude
-
-import PlutusCore (defaultCostModelParams) -- .Evaluation.Machine.CostModelInterface
-import Control.Monad.Class.MonadThrow (throwM)
 import Language.Marlowe.CLI.Types (ValidatorInfo(viAddress))
 import Language.Marlowe.CLI.Transaction (buildPayToScript)
--- import Plutus.V2.Ledger.Api (defaultCostModelParams)
+import qualified Prelude
+import qualified Ledger.Tx as LedgerTx
+
+import qualified Cardano.Api as Script
+import Cardano.Crypto.Hash (hashToBytes)
+import Ledger.Address (PaymentPubKeyHash (..))
+import Ledger.Tx.CardanoAPI (toCardanoPaymentKeyHash, toCardanoValue, toCardanoTxInWitness, fromCardanoTxOutDatum)
+import Ledger.Typed.Scripts (validatorScript)
+import PlutusCore (defaultCostModelParams)
+import Plutus.V1.Ledger.Api (fromData, toData)
 
 -- TODO(SN): hardcoded contestation period used by the tui
 tuiContestationPeriod :: ContestationPeriod
@@ -175,7 +185,8 @@ report typ msg = feedbackL ?~ UserFeedback typ msg
 --
 
 clearFeedback :: State -> State
-clearFeedback = feedbackL .~ empty
+-- clearFeedback = feedbackL .~ empty
+clearFeedback = id -- FIXME: revert
 
 handleEvent ::
   Client Tx IO ->
@@ -214,6 +225,8 @@ handleEvent client@Client{sendInput} cardanoClient (clearFeedback -> s) = \case
                   continue s
             | c `elem` ['n', 'N'] ->
               handleNewTxEvent client cardanoClient s
+            | c `elem` ['m', 'M'] ->
+              marloweContract client cardanoClient s
             | otherwise ->
               continue s
       _ -> continue s
@@ -419,13 +432,13 @@ handleNewTxEvent Client{sendInput, sk} CardanoClient{networkId} s = case s ^? he
               (lens id seq)
               [(u, show u, decodeUtf8 $ encodePretty u) | u <- nub addresses]
           addresses = getRecipientAddress <$> Map.elems utxo
-          getRecipientAddress (TxOut addr _ _) = addr
+          getRecipientAddress (TxOut addr _ _ _) = addr
        in newForm [field] (Prelude.head addresses)
 
     submit s' recipient =
       continue $ s' & dialogStateL .~ amountDialog input recipient
 
-  amountDialog input@(_, TxOut _ v _) recipient =
+  amountDialog input@(_, TxOut _ v _ _) recipient =
     Dialog title form submit
    where
     title = "Choose an amount (max: " <> show limit <> ")"
@@ -441,7 +454,15 @@ handleNewTxEvent Client{sendInput, sk} CardanoClient{networkId} s = case s ^? he
 
       -- construct Marlowe contract
       -- FIXME: Change contract
-      let contract = M.Close
+      let accountId = M.PK $ toPlutusKeyHash . verificationKeyHash $ getVerificationKey sk
+      let party = accountId
+
+      let from = accountId
+      let to = accountId
+
+      let contract = M.When [ M.Case (M.Deposit from from M.ada (M.Constant amount))
+                       (M.Pay from (M.Party to) M.ada (M.Constant amount) M.Close) ]
+                       (M.POSIXTime 1893456000) M.Close
 
       case initializeMarlowe contract input sk networkId of
         Left e -> continue $ s' & warn ("Failed to construct tx, contact @_ktorz_ on twitter: " <> show e)
@@ -449,13 +470,173 @@ handleNewTxEvent Client{sendInput, sk} CardanoClient{networkId} s = case s ^? he
           liftIO (sendInput (NewTx tx))
           continue $ s' & dialogStateL .~ NoDialog
 
+marloweContract ::
+  Client Tx IO ->
+  CardanoClient ->
+  State ->
+  EventM n (Next State)
+marloweContract Client{sendInput, sk} CardanoClient{networkId} s = case s ^? headStateL of
+  Just Open{utxo} ->
+    continue $ s & dialogStateL .~ transactionBuilderDialog utxo
+  _ ->
+    continue $ s & warn "Invalid command."
+ where
+  vk = getVerificationKey sk
+
+  transactionBuilderDialog utxo =
+    Dialog title form submit
+   where
+    myUTxO = myAvailableUTxO networkId vk s
+    title = "Select UTXO to spend"
+    -- FIXME: This crashes if the utxo is empty
+    form = newForm (utxoRadioField myUTxO) (Prelude.head (Map.toList myUTxO))
+    submit s' input =
+      continue $ s' & dialogStateL .~ recipientsDialog input utxo
+
+  recipientsDialog input utxos =
+    Dialog title form submit
+   where
+    title = "Select a Marlowe Contract"
+    form =
+      let
+        addresses = case availableMarloweUTxO networkId utxos of
+          Right addresses -> addresses
+          Left _ -> mempty
+        field = utxoRadioField addresses
+      in
+        newForm field (Prelude.head $ Map.toList addresses)
+
+    submit s' recipient =
+      continue $ s' & dialogStateL .~ applyInputDialog input recipient
+
+  applyInputDialog input@(_, TxOut _ v _ _) recipient =
+    Dialog title form submit
+   where
+    title = "Choose an amount to Deposit (max: " <> show limit <> ")"
+
+    Lovelace limit = selectLovelace v
+
+    form =
+      -- NOTE(SN): use 'Integer' because we don't have a 'Read Lovelace'
+      let field = editShowableFieldWithValidate (lens id seq) "amount" (\n -> n > 0 && n <= limit)
+       in newForm [field] limit
+
+    submit s' amount = do
+
+      case runMarlowe input recipient sk networkId amount of
+        Left e -> continue $ s' & warn ("runMarlowe failed" <> show e)
+        Right tx -> do
+          liftIO (sendInput (NewTx tx))
+          continue $ s' & dialogStateL .~ NoDialog
+
+-- | Classify a transaction output's Marlowe content.
+data MarloweOut = MarloweOut
+  { -- | The transaction input being produced.
+    moTxIn :: TxIn,
+    -- | The value output.
+    moValue :: Value,
+    -- | The Marlowe data in the output.
+    moOutput :: M.MarloweData
+  }
+
+classifyOutput :: (TxIn, TxOut CtxTx) -- ^ The transaction output.
+               -> Maybe MarloweOut    -- ^ The classified transaction output.
+classifyOutput (moTxIn, TxOut address value datum _) =
+  case datum of
+    TxOutDatumInline datum' -> do
+      let moValue = value
+      moOutput <- fromData $ toPlutusData datum'
+      pure $ MarloweOut {..}
+    _ -> Nothing
+
+runMarlowe ::
+  (TxIn, TxOut CtxUTxO) ->
+  (TxIn, TxOut CtxUTxO) ->
+  SigningKey PaymentKey ->
+  NetworkId ->
+  Integer ->
+  Either String Tx
+runMarlowe (txin, TxOut owner valueIn datumIn _) (txin', TxOut owner' valueIn' datumIn' ref') sk networkId amount = do
+
+      -- construct Marlowe input
+      let accountId = M.PK $ toPlutusKeyHash . verificationKeyHash $ getVerificationKey sk
+      let party = accountId
+      let normalInput = M.NormalInput $ M.IDeposit accountId party M.ada amount
+
+      MarloweOut {..} <- note "Unable to find Marlowe" $ classifyOutput (txin',
+         TxOut @CtxTx
+           owner'
+           valueIn'
+           (toTxContext datumIn')
+           ref'
+          )
+
+      let M.MarloweData {..} = moOutput
+      case M.computeTransaction (M.TransactionInput (M.POSIXTime 0, M.POSIXTime 0) [normalInput]) marloweState marloweContract of
+        M.Error msg -> Left $ show msg
+        M.TransactionOutput{..} -> do
+          let M.DatumInfo {..} = M.buildDatum txOutContract txOutState
+          let params = M.defaultMarloweParams
+          let payments = [(payee, money) | M.Payment _ payee money <- txOutPayments]
+          let payouts = mapMaybe f payments
+                          where f (M.Party (M.PK pkh), money) = hush $
+                                      do address <- makeShelleyAddressInEra networkId
+                                              <$> (PaymentCredentialByKey <$> toCardanoPaymentKeyHash (PaymentPubKeyHash pkh))
+                                              <*> pure NoStakeAddress
+                                         money <- toCardanoValue money
+                                         pure  (address, money)
+                                f _ = Nothing
+
+          -- FIXME: replace buildValidator with custom implementation
+          costModel <-
+               maybe
+                (fail "Missing default cost model.")
+                pure
+                defaultCostModelParams
+          M.ValidatorInfo {..} :: M.ValidatorInfo BabbageEra <- first M.unCliError $ M.buildValidator
+                              params
+                              ScriptDataInBabbageEra
+                              costModel
+                              networkId
+                              NoStakeAddress
+          let validator = validatorScript (M.smallUntypedValidator params)
+          let fee = Lovelace 0
+          let outs = map (uncurry makeTxOut) payouts
+          let Script.PlutusScript _ b = viScript
+          let M.RedeemerInfo {..} = M.buildRedeemer [normalInput]
+
+          let sc = Script.PlutusScriptWitness
+                  PlutusScriptV1InBabbage
+                  PlutusScriptV1
+                  (PScript b)
+                  (ScriptDatumForTxIn $ fromPlutusData $ toData moOutput)
+                  (fromPlutusData $ toData riRedeemer)
+                  (ExecutionUnits 0 0)
+
+          let bodyContent =
+                emptyTxBody
+                  { txIns = [
+                    (txin',
+                    BuildTxWith . ScriptWitness ScriptWitnessForSpending $ sc
+                    )]
+                  , txOuts = outs
+                  , txFee = TxFeeExplicit fee
+                  }
+
+          body <- first (mappend "makeTransactionBody:" . show) $ makeTransactionBody bodyContent
+          let witnesses = [makeShelleyKeyWitness body (WitnessPaymentKey sk)]
+          pure $ makeSignedTransaction witnesses body
+
+makeTxOut :: AddressInEra -> Value -> TxOut CtxTx
+makeTxOut address value = TxOut address value TxOutDatumNone ReferenceScriptNone
+
 initializeMarlowe ::
   M.Contract ->
   (TxIn, TxOut CtxUTxO) ->
   SigningKey PaymentKey ->
   NetworkId ->
   Either String Tx
-initializeMarlowe contract (txin, TxOut owner valueIn datumIn) sk networkId = do
+initializeMarlowe contract (txin, TxOut owner valueIn datumIn ref) sk networkId = do
   let params = M.defaultMarloweParams
   let state = M.emptyState (M.POSIXTime 0)
   let M.DatumInfo {..} = M.buildDatum contract state
@@ -468,17 +649,19 @@ initializeMarlowe contract (txin, TxOut owner valueIn datumIn) sk networkId = do
         defaultCostModelParams
   M.ValidatorInfo {..} :: M.ValidatorInfo BabbageEra <- first M.unCliError $ M.buildValidator
                       params
+                      ScriptDataInBabbageEra
                       costModel
                       networkId
                       NoStakeAddress
 
   let fee = Lovelace 0
 
-  let outs = payScript (M.buildPayToScript viAddress mempty diDatum) ++
+  let outs = payToScript (M.buildPayToScript viAddress (lovelaceToValue 2000000) diDatum) ++
          [ TxOut @CtxTx
            owner
-           valueIn
+           (valueIn <> negateValue (lovelaceToValue 2000000))
            (toTxContext datumIn)
+           ref
          ]
 
   let bodyContent =
@@ -492,16 +675,13 @@ initializeMarlowe contract (txin, TxOut owner valueIn datumIn) sk networkId = do
   let witnesses = [makeShelleyKeyWitness body (WitnessPaymentKey sk)]
   pure $ makeSignedTransaction witnesses body
 
-payScript ::
-  -- | The payment information.
-  M.PayToScript BabbageEra ->
-  -- | The transaction input.
-  [TxOut CtxTx]
-payScript M.PayToScript {..} =
+payToScript :: M.PayToScript BabbageEra -> [TxOut CtxTx]
+payToScript M.PayToScript {..} =
   [ TxOut
       address
       value
       (TxOutDatumInline datumOut)
+      ReferenceScriptNone
   ]
 
 liftEither' :: MonadFail m => Either String a -> m a
@@ -597,6 +777,7 @@ draw Client{sk} CardanoClient{networkId} s =
                     <=> padLeft (Pad 2) (drawUTxO utxo)
               ]
               [ "[N]ew Transaction"
+              , "[M]arlowe Contract"
               , "[C]lose"
               , "[Q]uit"
               ]
@@ -644,7 +825,7 @@ draw Client{sk} CardanoClient{networkId} s =
   drawUTxO utxo =
     let byAddress =
           Map.foldrWithKey
-            (\k v@(TxOut addr _ _) -> Map.unionWith (++) (Map.singleton addr [(k, v)]))
+            (\k v@(TxOut addr _ _ _) -> Map.unionWith (++) (Map.singleton addr [(k, v)]))
             mempty
             $ UTxO.toMap utxo
      in vBox
@@ -662,7 +843,7 @@ draw Client{sk} CardanoClient{networkId} s =
     | otherwise =
       widget
    where
-    widget = txt $ ellipsize 40 $ serialiseAddress addr
+     widget = txt $ ellipsize 40 $ serialiseAddress addr
 
   ellipsize n t = Text.take (n - 2) t <> ".."
 
@@ -753,12 +934,30 @@ utxoRadioField u =
       ]
   ]
 
+availableMarloweUTxO :: NetworkId -> UTxO -> Either String (Map TxIn (TxOut CtxUTxO))
+availableMarloweUTxO networkId  (UTxO utxos) = do
+  let params = M.defaultMarloweParams
+  let state = M.emptyState (M.POSIXTime 0)
+  costModel <-
+       maybe
+        (fail "Missing default cost model.")
+        pure
+        defaultCostModelParams
+  M.ValidatorInfo {..} :: M.ValidatorInfo BabbageEra <- first M.unCliError $ M.buildValidator
+                      params
+                      ScriptDataInBabbageEra
+                      costModel
+                      networkId
+                      NoStakeAddress
+
+  pure $ Map.filter (\(TxOut addr _ _ _) -> addr == viAddress) utxos
+
 myAvailableUTxO :: NetworkId -> VerificationKey PaymentKey -> State -> Map TxIn (TxOut CtxUTxO)
 myAvailableUTxO networkId vk s =
   case s ^? headStateL of
     Just Open{utxo = UTxO u'} ->
       let myAddress = mkVkAddress networkId vk
-       in Map.filter (\(TxOut addr _ _) -> addr == myAddress) u'
+       in Map.filter (\(TxOut addr _ _ _) -> addr == myAddress) u'
     _ ->
       mempty
 

@@ -92,8 +92,8 @@ package plutus-core
 source-repository-package
   type: git
   location: https://github.com/input-output-hk/marlowe-cardano
-  tag: 12bfcef39b2422f24d4f33defe74b7d4c817dfdf
-  --sha256: 0pqqvmw5g2v4knilj817j6bnv4v7wbv1yh25b6wbrpa2lxs3v3q0
+  tag: 0380577955309a98619c68c86b8a00c8c6575753
+  --sha256: 1l1qwa6fx5vcwy6pwhdqaw889hja951n4gm0zpslrv5kgsd34r2s
   subdir:
     libs/aeson-via-serialise
     libs/base16-aeson
@@ -106,9 +106,9 @@ source-repository-package
 
 source-repository-package
   type: git
-  location: https://github.com/yveshauser/hydra-poc
-  tag: f3d6cd711dc9980125a3768f225a60dd9fb3bf96
-  --sha256: 085bwh31967yxvk4ixvch7v0y53dv7ifkgkxvbmlhvvq3wfd0rf4
+  location: https://github.com/input-output-hk/hydra-poc
+  tag: cc8f40fcd21261329ca36a3f7c03981721977631
+  --sha256: 1mgvm7472zfczd8rqsfcs2kz0kc9n9zkfcj7ws9vcc3nvagl2s4l
   subdir:
     -- hydra-cluster
     hydra-node
@@ -127,8 +127,8 @@ source-repository-package
 source-repository-package
   type: git
   location: https://github.com/input-output-hk/plutus-apps
-  tag: 1a7047989a8ce0dffad1bb629728312935f32cb9
-  --sha256: 146cs9w5cf4z9bv63rdhhnbhb74j1lzyxfi8ig1xx726dgjxckfh
+  tag: 2b950d98874377be9635b4b8d3bf0c3ef72aac96
+  --sha256: 0jagzipyjzakb56zi9ysfdgvfri97xrckhizi5y15025ax8rih8l
   subdir:
     plutus-script-utils
     plutus-ledger
@@ -161,10 +161,17 @@ source-repository-package
 source-repository-package
   type: git
   location: https://github.com/input-output-hk/cardano-node
-  tag: 1.35.2
-  --sha256: 01a5qdrmsag18s2mlf8axfbrag59j2fp6xyc89pwmzgs7x77ldsr
+  tag: aed8e71339cf6c92847fff83fbd92be61e468174
+  --sha256: 1j8lkrg8xz6gjaq8grx7vc4cynlz5x6n3cd9q4y5w3kzsd89072a
   subdir:
     cardano-api
+
+source-repository-package
+  type: git
+  location: https://github.com/input-output-hk/cardano-node
+  tag: 1.35.3
+  --sha256: 020fwimsm24yblr1fmnwx240wj8r3x715p89cpjgnnd8axwf32p0
+  subdir:
     cardano-cli
     cardano-git-rev
     cardano-node
@@ -197,8 +204,8 @@ source-repository-package
 source-repository-package
   type: git
   location: https://github.com/input-output-hk/cardano-base
-  tag: 0f3a867493059e650cda69e20a5cbf1ace289a57
-  --sha256: 0p0az3sbkhb7njji8xxdrfb0yx2gc8fmrh872ffm8sfip1w29gg1
+  tag: a3c13fb11bc41fedff7885ca70a3b33f61fef4b5
+  --sha256: 0h492cz9mvzbsl5yzvp3iq40c0z0j5hmrifdrnnqzzk02g9j9c4b
   subdir:
     base-deriving-via
     binary
@@ -220,8 +227,8 @@ source-repository-package
 source-repository-package
   type: git
   location: https://github.com/input-output-hk/cardano-ledger
-  tag: ebcf1a8936dd84de0182d54004473f4ce66c7923
-  --sha256: 1nx07kcjhj39alarr0bxw9viw3m6flfr8d14g2a3crymf6hxwg36
+  tag: f49879a79098d9372d63baa13b94a941a56eda34
+  --sha256: 0i9x66yqkrvx2w79dy6lzlya82yxc8567rgjj828vc2d46d6nvx6
   subdir:
     eras/alonzo/impl
     eras/alonzo/test-suite
@@ -251,8 +258,8 @@ source-repository-package
 source-repository-package
   type: git
   location: https://github.com/input-output-hk/cardano-prelude
-  tag: bb4ed71ba8e587f672d06edf9d2e376f4b055555
-  --sha256: 00h10l5mmiza9819p9v5q5749nb9pzgi20vpzpy1d34zmh6gf1cj
+  tag: 6ea36cf2247ac0bc33e08c327abec34dfd05bd99
+  --sha256: 0z2y3wzppc12bpn9bl48776ms3nszw8j58xfsdxf97nzjgrmd62g
   subdir:
     cardano-prelude
     cardano-prelude-test
@@ -287,8 +294,8 @@ source-repository-package
 source-repository-package
   type: git
   location: https://github.com/input-output-hk/ouroboros-network
-  tag: cb9eba406ceb2df338d8384b35c8addfe2067201
-  --sha256: 066llskxzjgcs13lwlvklb28azb9kd9b77j61x8fvrj1rlf5njfw
+  tag: c764553561bed8978d2c6753d1608dc65449617a
+  --sha256: 0hdh7xdrvxw943r6qr0xr4kwszindh5mnsn1lww6qdnxnmn7wcsc
   subdir:
     monoidal-synchronisation
     network-mux

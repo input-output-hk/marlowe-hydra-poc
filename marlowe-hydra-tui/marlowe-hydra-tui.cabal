@@ -34,12 +34,15 @@ executable marlowe-hydra-tui
                  , base
                  , bytestring
                  , brick
+                 , cardano-api
+                 , serialise
                  , cardano-crypto-class
                  , cardano-ledger-alonzo
                  , cardano-ledger-core
                  , cardano-ledger-shelley
                  , cardano-ledger-shelley-ma
                  , containers
+                 , errors
                  , hydra-cardano-api
                  , hydra-node
                  , hydra-prelude
@@ -51,7 +54,9 @@ executable marlowe-hydra-tui
                  , microlens-th
                  , mtl
                  , optparse-applicative
+                 , one-line-aeson-text
                  , plutus-core
+                 , plutus-ledger
                  , plutus-ledger-api
                  , QuickCheck
                  , text
