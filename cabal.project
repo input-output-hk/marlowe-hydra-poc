@@ -92,8 +92,8 @@ package plutus-core
 source-repository-package
   type: git
   location: https://github.com/input-output-hk/marlowe-cardano
-  tag: 0380577955309a98619c68c86b8a00c8c6575753
-  --sha256: 1l1qwa6fx5vcwy6pwhdqaw889hja951n4gm0zpslrv5kgsd34r2s
+  tag: 43ea3f31e527330aa04d22d89e18f173f1ba2562
+  --sha256: 177chm77h6rqld94zcinhmq28fvlzlcpfvln46v0zl1vd09g7wlq
   subdir:
     libs/aeson-via-serialise
     libs/base16-aeson
@@ -107,8 +107,8 @@ source-repository-package
 source-repository-package
   type: git
   location: https://github.com/input-output-hk/hydra-poc
-  tag: cc8f40fcd21261329ca36a3f7c03981721977631
-  --sha256: 1mgvm7472zfczd8rqsfcs2kz0kc9n9zkfcj7ws9vcc3nvagl2s4l
+  tag: 8dbb1d9836bb57094c8a856fe59d62447497229c
+  --sha256: 08fqhhbz38jx13gxanswi22nddah0in5ddv88m10hib0r7q9mqyk
   subdir:
     -- hydra-cluster
     hydra-node

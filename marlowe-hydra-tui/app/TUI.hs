@@ -10,6 +10,10 @@ module TUI where
 
 import Hydra.Prelude hiding (State, padLeft)
 
+import qualified Cardano.Api as C
+import qualified Language.Marlowe.CLI.Cardano.Api as C
+import qualified Cardano.Api.Shelley as CS
+
 
 import Brick
 import Brick.BChan (newBChan, writeBChan)
@@ -76,6 +80,7 @@ import Ledger.Tx.CardanoAPI (toCardanoPaymentKeyHash, toCardanoValue, toCardanoT
 import Ledger.Typed.Scripts (validatorScript)
 import PlutusCore (defaultCostModelParams)
 import Plutus.V1.Ledger.Api (fromData, toData)
+import Plutus.V1.Ledger.ProtocolVersions (vasilPV)
 
 -- TODO(SN): hardcoded contestation period used by the tui
 tuiContestationPeriod :: ContestationPeriod
@@ -87,11 +92,14 @@ tuiContestationPeriod = UnsafeContestationPeriod 10
 
 data State
   = Disconnected
-      {nodeHost :: Host}
+      {nodeHost :: Host
+      , protocolParams :: CS.ProtocolParameters
+      }
   | Connected
       { me :: Maybe Party -- TODO(SN): we could make a nicer type if ClientConnected is only emited of 'Hydra.Client' upon receiving a 'Greeting'
       , nodeHost :: Host
       , peers :: [Host]
+      , protocolParams :: CS.ProtocolParameters
       , headState :: HeadState
       , dialogState :: DialogState
       , feedback :: Maybe UserFeedback
@@ -253,9 +261,10 @@ handleAppEvent s = \case
       , headState = Idle
       , dialogState = NoDialog
       , feedback = Nothing
+      , protocolParams = protocolParams s
       }
   ClientDisconnected ->
-    Disconnected{nodeHost = s ^. nodeHostL}
+    Disconnected{nodeHost = s ^. nodeHostL, protocolParams = protocolParams s}
   Update Greetings{me} ->
     s & meL ?~ me
   Update (PeerConnected p) ->
@@ -523,7 +532,7 @@ marloweContract Client{sendInput, sk} CardanoClient{networkId} s = case s ^? hea
 
     submit s' amount = do
 
-      case runMarlowe input recipient sk networkId amount of
+      case runMarlowe input recipient sk networkId (protocolParams s) amount of
         Left e -> continue $ s' & warn ("runMarlowe failed" <> show e)
         Right tx -> do
           liftIO (sendInput (NewTx tx))
@@ -554,9 +563,10 @@ runMarlowe ::
   (TxIn, TxOut CtxUTxO) ->
   SigningKey PaymentKey ->
   NetworkId ->
+  CS.ProtocolParameters ->
   Integer ->
   Either String Tx
-runMarlowe (txin, TxOut owner valueIn datumIn _) (txin', TxOut owner' valueIn' datumIn' ref') sk networkId amount = do
+runMarlowe (txin, TxOut owner valueIn datumIn _) (txin', TxOut owner' valueIn' datumIn' ref') sk networkId protocolParams amount = do
 
       -- construct Marlowe input
       let accountId = M.PK $ toPlutusKeyHash . verificationKeyHash $ getVerificationKey sk
@@ -575,8 +585,8 @@ runMarlowe (txin, TxOut owner valueIn datumIn _) (txin', TxOut owner' valueIn' d
       case M.computeTransaction (M.TransactionInput (M.POSIXTime 0, M.POSIXTime 0) [normalInput]) marloweState marloweContract of
         M.Error msg -> Left $ show msg
         M.TransactionOutput{..} -> do
-          let M.DatumInfo {..} = M.buildDatum txOutContract txOutState
           let params = M.defaultMarloweParams
+          let M.DatumInfo {..} = M.buildMarloweDatum params txOutContract txOutState
           let payments = [(payee, money) | M.Payment _ payee money <- txOutPayments]
           let payouts = mapMaybe f payments
                           where f (M.Party (M.PK pkh), money) = hush $
@@ -593,23 +603,24 @@ runMarlowe (txin, TxOut owner valueIn datumIn _) (txin', TxOut owner' valueIn' d
                 (fail "Missing default cost model.")
                 pure
                 defaultCostModelParams
-          M.ValidatorInfo {..} :: M.ValidatorInfo BabbageEra <- first M.unCliError $ M.buildValidator
-                              params
+
+
+          M.ValidatorInfo {..} <- first M.unCliError $ M.marloweValidatorInfo
                               ScriptDataInBabbageEra
+                              vasilPV
                               costModel
                               networkId
                               NoStakeAddress
-          let validator = validatorScript (M.smallUntypedValidator params)
+          let validator = validatorScript M.smallMarloweValidator
           let fee = Lovelace 0
           let outs = map (uncurry makeTxOut) payouts
-          let Script.PlutusScript _ b = viScript
           let M.RedeemerInfo {..} = M.buildRedeemer [normalInput]
 
           let sc = Script.PlutusScriptWitness
-                  PlutusScriptV1InBabbage
-                  PlutusScriptV1
-                  (PScript b)
-                  (ScriptDatumForTxIn $ fromPlutusData $ toData moOutput)
+                  PlutusScriptV2InBabbage
+                  PlutusScriptV2
+                  (PScript viScript)
+                  InlineScriptDatum -- (ScriptDatumForTxIn $ fromPlutusData $ toData moOutput)
                   (fromPlutusData $ toData riRedeemer)
                   (ExecutionUnits 0 0)
 
@@ -619,11 +630,14 @@ runMarlowe (txin, TxOut owner valueIn datumIn _) (txin', TxOut owner' valueIn' d
                     (txin',
                     BuildTxWith . ScriptWitness ScriptWitnessForSpending $ sc
                     )]
+                  , txInsCollateral = TxInsCollateral [txin]
                   , txOuts = outs
                   , txFee = TxFeeExplicit fee
                   }
+          let bodyContent' = bodyContent { txProtocolParams = C.BuildTxWith $ Just protocolParams }
 
-          body <- first (mappend "makeTransactionBody:" . show) $ makeTransactionBody bodyContent
+          body <- first (mappend "makeTransactionBody:" . show) $ makeTransactionBody bodyContent'
+          -- let body' = body { txProtocolParams = C.BuildTxWith Nothing }
           let witnesses = [makeShelleyKeyWitness body (WitnessPaymentKey sk)]
           pure $ makeSignedTransaction witnesses body
 
@@ -639,7 +653,7 @@ initializeMarlowe ::
 initializeMarlowe contract (txin, TxOut owner valueIn datumIn ref) sk networkId = do
   let params = M.defaultMarloweParams
   let state = M.emptyState (M.POSIXTime 0)
-  let M.DatumInfo {..} = M.buildDatum contract state
+  let M.DatumInfo {..} = M.buildMarloweDatum params contract state
 
   -- FIXME: replace buildValidator with custom implementation
   costModel <-
@@ -647,9 +661,9 @@ initializeMarlowe contract (txin, TxOut owner valueIn datumIn ref) sk networkId 
         (fail "Missing default cost model.")
         pure
         defaultCostModelParams
-  M.ValidatorInfo {..} :: M.ValidatorInfo BabbageEra <- first M.unCliError $ M.buildValidator
-                      params
+  M.ValidatorInfo {..} <- first M.unCliError $ M.marloweValidatorInfo
                       ScriptDataInBabbageEra
+                      vasilPV
                       costModel
                       networkId
                       NoStakeAddress
@@ -936,16 +950,14 @@ utxoRadioField u =
 
 availableMarloweUTxO :: NetworkId -> UTxO -> Either String (Map TxIn (TxOut CtxUTxO))
 availableMarloweUTxO networkId  (UTxO utxos) = do
-  let params = M.defaultMarloweParams
-  let state = M.emptyState (M.POSIXTime 0)
   costModel <-
        maybe
         (fail "Missing default cost model.")
         pure
         defaultCostModelParams
-  M.ValidatorInfo {..} :: M.ValidatorInfo BabbageEra <- first M.unCliError $ M.buildValidator
-                      params
+  M.ValidatorInfo {..} <- first M.unCliError $ M.marloweValidatorInfo
                       ScriptDataInBabbageEra
+                      vasilPV
                       costModel
                       networkId
                       NoStakeAddress
@@ -985,6 +997,30 @@ style _ =
 
 runWithVty :: IO Vty -> Options -> IO State
 runWithVty buildVty options@Options{hydraNodeHost, cardanoNetworkId, cardanoNodeSocket} = do
+
+  let
+    connection = C.LocalNodeConnectInfo
+      { C.localConsensusModeParams = C.CardanoModeParams $ C.EpochSlots 21600
+      , localNodeNetworkId = cardanoNetworkId
+      , localNodeSocketPath = cardanoNodeSocket
+      }
+    q = C.QueryProtocolParameters
+  protocol <- C.queryNodeLocalState  connection Nothing (C.QueryInEra BabbageEraInCardanoMode (C.QueryInShelleyBasedEra C.ShelleyBasedEraBabbage q))
+  protocolParameters <- case protocol of
+    Right (Right p) -> do
+      let
+        cardanoNodePV = CS.protocolParamProtocolVersion p
+        plutusPV = C.toPlutusProtocolVersion cardanoNodePV
+
+      when (plutusPV /= vasilPV) $ error $ "NOT VASIL? " <> show plutusPV
+      pure p
+    _ -> do
+      error "Unable to grab protocol"
+
+  let
+    initialState = Disconnected{nodeHost = hydraNodeHost, protocolParams = protocolParameters}
+
+
   eventChan <- newBChan 10
   withAsync (timer eventChan) $ \_ ->
     -- REVIEW(SN): what happens if callback blocks?
@@ -1001,7 +1037,6 @@ runWithVty buildVty options@Options{hydraNodeHost, cardanoNetworkId, cardanoNode
       , appAttrMap = style
       }
 
-  initialState = Disconnected{nodeHost = hydraNodeHost}
 
   cardanoClient = mkCardanoClient cardanoNetworkId cardanoNodeSocket
 
