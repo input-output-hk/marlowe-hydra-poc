@@ -1,20 +1,28 @@
 {-# LANGUAGE DuplicateRecordFields #-}
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE NumericUnderscores #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE BlockArguments #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 
 module TUI where
 
 import Hydra.Prelude hiding (State, padLeft)
 
+import Options.Applicative (Parser, long, metavar, strOption, value, help, showDefault)
+
 import qualified Cardano.Api as C
 import qualified Language.Marlowe.CLI.Cardano.Api as C
 import qualified Cardano.Api.Shelley as CS
 
-
+import Data.Aeson (decode)
 import Brick
 import Brick.BChan (newBChan, writeBChan)
 import Brick.Forms (Form, FormFieldState, checkboxField, editShowableFieldWithValidate, focusedFormInputAttr, formState, handleFormEvent, invalidFields, invalidFormInputAttr, newForm, radioField, renderForm)
@@ -25,6 +33,7 @@ import Control.Monad.Class.MonadThrow (throwM)
 import Control.Monad.Except
 import Control.Error.Util (hush, note)
 import Data.Bifunctor
+import qualified Data.ByteString.Lazy as B
 import Data.List (nub, (\\), groupBy)
 import qualified Data.Map.Strict as Map
 import qualified Data.Text as Text
@@ -46,7 +55,7 @@ import Graphics.Vty (
 import qualified Graphics.Vty as Vty
 import Graphics.Vty.Attributes (defAttr)
 import Hydra.Cardano.Api as H
-import Hydra.Chain.CardanoClient (CardanoClient (..), mkCardanoClient)
+import Hydra.Chain.CardanoClient (CardanoClient (..), mkCardanoClient, queryTipSlotNo)
 import Hydra.Chain.Direct.Util (isMarkedOutput)
 import Hydra.Client (Client (..), HydraEvent (..), withClient)
 import Hydra.ClientInput (ClientInput (..))
@@ -58,7 +67,7 @@ import Hydra.Network (Host (..))
 import Hydra.Party (Party (..))
 import Hydra.ServerOutput (ServerOutput (..))
 import Hydra.Snapshot (Snapshot (..))
-import Hydra.TUI.Options (Options (..))
+import Hydra.TUI.Options (Options (..), parseOptions)
 import Lens.Micro (Lens', lens, (%~), (.~), (?~), (^.), (^?))
 import Lens.Micro.TH (makeLensesFor)
 import qualified Language.Marlowe as M
@@ -72,14 +81,14 @@ import Language.Marlowe.CLI.Types (ValidatorInfo(viAddress))
 import Language.Marlowe.CLI.Transaction (buildPayToScript)
 import qualified Prelude
 import qualified Ledger.Tx as LedgerTx
-
 import qualified Cardano.Api as Script
 import Cardano.Crypto.Hash (hashToBytes)
 import Ledger.Address (PaymentPubKeyHash (..))
 import Ledger.Tx.CardanoAPI (toCardanoPaymentKeyHash, toCardanoValue, toCardanoTxInWitness, fromCardanoTxOutDatum)
 import Ledger.Typed.Scripts (validatorScript)
 import PlutusCore (defaultCostModelParams)
-import Plutus.V1.Ledger.Api (fromData, toData)
+import Plutus.V2.Ledger.Api (fromData, toData, Redeemer(..))
+import Plutus.V1.Ledger.SlotConfig (SlotConfig (..), posixTimeToEnclosingSlot, slotToBeginPOSIXTime, slotToEndPOSIXTime)
 import Plutus.V1.Ledger.ProtocolVersions (vasilPV)
 
 -- TODO(SN): hardcoded contestation period used by the tui
@@ -94,12 +103,16 @@ data State
   = Disconnected
       {nodeHost :: Host
       , protocolParams :: CS.ProtocolParameters
+      , slotConfig :: SlotConfig
+      , slotNo :: SlotNo
       }
   | Connected
       { me :: Maybe Party -- TODO(SN): we could make a nicer type if ClientConnected is only emited of 'Hydra.Client' upon receiving a 'Greeting'
       , nodeHost :: Host
       , peers :: [Host]
       , protocolParams :: CS.ProtocolParameters
+      , slotConfig :: SlotConfig
+      , slotNo :: SlotNo
       , headState :: HeadState
       , dialogState :: DialogState
       , feedback :: Maybe UserFeedback
@@ -261,10 +274,12 @@ handleAppEvent s = \case
       , headState = Idle
       , dialogState = NoDialog
       , feedback = Nothing
+      , slotConfig = slotConfig s
+      , slotNo = slotNo s
       , protocolParams = protocolParams s
       }
   ClientDisconnected ->
-    Disconnected{nodeHost = s ^. nodeHostL, protocolParams = protocolParams s}
+    Disconnected{nodeHost = s ^. nodeHostL, protocolParams = protocolParams s, slotConfig = slotConfig s, slotNo = slotNo s}
   Update Greetings{me} ->
     s & meL ?~ me
   Update (PeerConnected p) ->
@@ -284,8 +299,8 @@ handleAppEvent s = \case
   Update HeadIsOpen{utxo} ->
     s & headStateL %~ headIsOpen utxo
       & info "Head is now open!"
-  Update HeadIsClosed{snapshotNumber, remainingContestationPeriod} ->
-    s & headStateL .~ Closed{remainingContestationPeriod}
+  Update HeadIsClosed{snapshotNumber} ->
+    s & headStateL .~ Closed{remainingContestationPeriod = 0}
       & info ("Head closed with snapshot number " <> show snapshotNumber)
   Update HeadIsContested{snapshotNumber} ->
     s & info ("Head contested with snapshot number " <> show snapshotNumber)
@@ -314,7 +329,9 @@ handleAppEvent s = \case
     s & warn ("An error happened while trying to post a transaction on-chain: " <> show postTxError)
   Update RolledBack ->
     s & info "Chain rolled back! You might need to re-submit Head transactions manually now."
-  Tick ->
+  Update (TxExpired t) ->
+    s & info "Chain rolled back! You might need to re-submit Head transactions manually now."
+  Tick t ->
     s & headStateL %~ handleTick
  where
   partyCommitted party commit = \case
@@ -429,50 +446,23 @@ handleNewTxEvent Client{sendInput, sk} CardanoClient{networkId} s = case s ^? he
     -- FIXME: This crashes if the utxo is empty
     form = newForm (utxoRadioField myUTxO) (Prelude.head (Map.toList myUTxO))
     submit s' input =
-      continue $ s' & dialogStateL .~ recipientsDialog input utxo
+      continue $ s' & dialogStateL .~ amountDialog input
 
-  recipientsDialog input (UTxO utxo) =
+  amountDialog input@(_, TxOut _ v _ _) =
     Dialog title form submit
    where
-    title = "Select a recipient"
-    form =
-      let field =
-            radioField
-              (lens id seq)
-              [(u, show u, decodeUtf8 $ encodePretty u) | u <- nub addresses]
-          addresses = getRecipientAddress <$> Map.elems utxo
-          getRecipientAddress (TxOut addr _ _ _) = addr
-       in newForm [field] (Prelude.head addresses)
-
-    submit s' recipient =
-      continue $ s' & dialogStateL .~ amountDialog input recipient
-
-  amountDialog input@(_, TxOut _ v _ _) recipient =
-    Dialog title form submit
-   where
-    title = "Choose an amount (max: " <> show limit <> ")"
-
-    Lovelace limit = selectLovelace v
+    title = "Choose an amount to deposit into the Marlowe contract"
+    limit = 100_000_000
 
     form =
-      -- NOTE(SN): use 'Integer' because we don't have a 'Read Lovelace'
       let field = editShowableFieldWithValidate (lens id seq) "amount" (\n -> n > 0 && n <= limit)
        in newForm [field] limit
 
     submit s' amount = do
 
-      -- construct Marlowe contract
       -- FIXME: Change contract
       let accountId = M.PK $ toPlutusKeyHash . verificationKeyHash $ getVerificationKey sk
-      let party = accountId
-
-      let from = accountId
-      let to = accountId
-
-      let contract = M.When [ M.Case (M.Deposit from from M.ada (M.Constant amount))
-                       (M.Pay from (M.Party to) M.ada (M.Constant amount) M.Close) ]
-                       (M.POSIXTime 1893456000) M.Close
-
+      let contract = M.When [ M.Case (M.Deposit accountId accountId M.ada (M.Constant amount)) M.Close ] (M.POSIXTime 4820114293000) M.Close -- TODO
       case initializeMarlowe contract input sk networkId of
         Left e -> continue $ s' & warn ("Failed to construct tx, contact @_ktorz_ on twitter: " <> show e)
         Right tx -> do
@@ -500,9 +490,19 @@ marloweContract Client{sendInput, sk} CardanoClient{networkId} s = case s ^? hea
     -- FIXME: This crashes if the utxo is empty
     form = newForm (utxoRadioField myUTxO) (Prelude.head (Map.toList myUTxO))
     submit s' input =
-      continue $ s' & dialogStateL .~ recipientsDialog input utxo
+      continue $ s' & dialogStateL .~ collBuilderDialog input utxo
 
-  recipientsDialog input utxos =
+  collBuilderDialog input utxo =
+    Dialog title form submit
+   where
+    myUTxO = myAvailableUTxO networkId vk s
+    title = "Select UTXO for collateral"
+    -- FIXME: This crashes if the utxo is empty
+    form = newForm (utxoRadioField myUTxO) (Prelude.head (Map.toList myUTxO))
+    submit s' coll =
+      continue $ s' & dialogStateL .~ recipientsDialog input coll utxo
+
+  recipientsDialog input coll utxos =
     Dialog title form submit
    where
     title = "Select a Marlowe Contract"
@@ -516,9 +516,9 @@ marloweContract Client{sendInput, sk} CardanoClient{networkId} s = case s ^? hea
         newForm field (Prelude.head $ Map.toList addresses)
 
     submit s' recipient =
-      continue $ s' & dialogStateL .~ applyInputDialog input recipient
+      continue $ s' & dialogStateL .~ applyInputDialog input coll recipient
 
-  applyInputDialog input@(_, TxOut _ v _ _) recipient =
+  applyInputDialog input@(_, TxOut _ v _ _) coll recipient =
     Dialog title form submit
    where
     title = "Choose an amount to Deposit (max: " <> show limit <> ")"
@@ -532,8 +532,10 @@ marloweContract Client{sendInput, sk} CardanoClient{networkId} s = case s ^? hea
 
     submit s' amount = do
 
-      case runMarlowe input recipient sk networkId (protocolParams s) amount of
-        Left e -> continue $ s' & warn ("runMarlowe failed" <> show e)
+      case runMarlowe input coll recipient sk networkId (protocolParams s) (slotConfig s) (slotNo s) amount of
+        Left e -> do
+          liftIO (writeFile "err.log" (show e))
+          continue $ s' & warn ("runMarlowe failed: " <> show e)
         Right tx -> do
           liftIO (sendInput (NewTx tx))
           continue $ s' & dialogStateL .~ NoDialog
@@ -558,20 +560,34 @@ classifyOutput (moTxIn, TxOut address value datum _) =
       pure $ MarloweOut {..}
     _ -> Nothing
 
+roundTxInterval :: SlotConfig -> M.TransactionInput -> M.TransactionInput
+roundTxInterval sc ti@M.TransactionInput{txInterval=txInterval@(minimumTime, maximumTime)} =
+  let toSlot = posixTimeToEnclosingSlot sc
+      txInterval' =
+            ( slotToBeginPOSIXTime sc . toSlot $ minimumTime
+            , slotToEndPOSIXTime sc . toSlot $ maximumTime
+            )
+   in ti { M.txInterval = txInterval' }
+
+posixTimeToSlotNo :: SlotConfig -> M.POSIXTime -> SlotNo
+posixTimeToSlotNo slotConfig posix = SlotNo . fromIntegral $ posixTimeToEnclosingSlot slotConfig posix
+
 runMarlowe ::
+  (TxIn, TxOut CtxUTxO) ->
   (TxIn, TxOut CtxUTxO) ->
   (TxIn, TxOut CtxUTxO) ->
   SigningKey PaymentKey ->
   NetworkId ->
   CS.ProtocolParameters ->
+  SlotConfig ->
+  SlotNo ->
   Integer ->
   Either String Tx
-runMarlowe (txin, TxOut owner valueIn datumIn _) (txin', TxOut owner' valueIn' datumIn' ref') sk networkId protocolParams amount = do
+runMarlowe (txin, TxOut owner valueIn datumIn ref) (txin'', _) (txin', TxOut owner' valueIn' datumIn' ref') sk networkId protocolParams slotConfig (SlotNo slotNo) amount = do
 
       -- construct Marlowe input
       let accountId = M.PK $ toPlutusKeyHash . verificationKeyHash $ getVerificationKey sk
-      let party = accountId
-      let normalInput = M.NormalInput $ M.IDeposit accountId party M.ada amount
+      let normalInput = M.NormalInput $ M.IDeposit accountId accountId M.ada amount
 
       MarloweOut {..} <- note "Unable to find Marlowe" $ classifyOutput (txin',
          TxOut @CtxTx
@@ -582,28 +598,28 @@ runMarlowe (txin, TxOut owner valueIn datumIn _) (txin', TxOut owner' valueIn' d
           )
 
       let M.MarloweData {..} = moOutput
-      case M.computeTransaction (M.TransactionInput (M.POSIXTime 0, M.POSIXTime 0) [normalInput]) marloweState marloweContract of
+      let from = scSlotZeroTime slotConfig
+      let to = slotToEndPOSIXTime slotConfig (fromIntegral slotNo * 3600)
+      let ti = roundTxInterval slotConfig $ M.TransactionInput (from, to) [normalInput]
+
+      case M.computeTransaction ti marloweState marloweContract of
         M.Error msg -> Left $ show msg
         M.TransactionOutput{..} -> do
-          let params = M.defaultMarloweParams
-          let M.DatumInfo {..} = M.buildMarloweDatum params txOutContract txOutState
           let payments = [(payee, money) | M.Payment _ payee money <- txOutPayments]
           let payouts = mapMaybe f payments
                           where f (M.Party (M.PK pkh), money) = hush $
                                       do address <- makeShelleyAddressInEra networkId
-                                              <$> (PaymentCredentialByKey <$> toCardanoPaymentKeyHash (PaymentPubKeyHash pkh))
-                                              <*> pure NoStakeAddress
+                                               <$> (PaymentCredentialByKey <$> toCardanoPaymentKeyHash (PaymentPubKeyHash pkh))
+                                               <*> pure NoStakeAddress
                                          money <- toCardanoValue money
                                          pure  (address, money)
                                 f _ = Nothing
 
-          -- FIXME: replace buildValidator with custom implementation
           costModel <-
                maybe
                 (fail "Missing default cost model.")
                 pure
                 defaultCostModelParams
-
 
           M.ValidatorInfo {..} <- first M.unCliError $ M.marloweValidatorInfo
                               ScriptDataInBabbageEra
@@ -611,33 +627,41 @@ runMarlowe (txin, TxOut owner valueIn datumIn _) (txin', TxOut owner' valueIn' d
                               costModel
                               networkId
                               NoStakeAddress
-          let validator = validatorScript M.smallMarloweValidator
-          let fee = Lovelace 0
-          let outs = map (uncurry makeTxOut) payouts
           let M.RedeemerInfo {..} = M.buildRedeemer [normalInput]
+
+          maxExecutionUnits <-
+               maybe
+                (fail "Missing execution units.")
+                pure
+                (protocolParamMaxTxExUnits protocolParams)
 
           let sc = Script.PlutusScriptWitness
                   PlutusScriptV2InBabbage
                   PlutusScriptV2
                   (PScript viScript)
-                  InlineScriptDatum -- (ScriptDatumForTxIn $ fromPlutusData $ toData moOutput)
+                  InlineScriptDatum
                   (fromPlutusData $ toData riRedeemer)
-                  (ExecutionUnits 0 0)
+                  maxExecutionUnits -- TODO
+
+          let fee = Lovelace 1000000 -- TODO
+          let minAda = Lovelace 0
 
           let bodyContent =
+                addExtraRequiredSigners [verificationKeyHash $ getVerificationKey sk]
                 emptyTxBody
-                  { txIns = [
-                    (txin',
-                    BuildTxWith . ScriptWitness ScriptWitnessForSpending $ sc
-                    )]
-                  , txInsCollateral = TxInsCollateral [txin]
-                  , txOuts = outs
+                  { txIns = [ (txin', BuildTxWith . ScriptWitness ScriptWitnessForSpending $ sc)
+                            , (txin, BuildTxWith $ KeyWitness KeyWitnessForSpending)
+                            ]
+                  , txInsCollateral = TxInsCollateral [txin'']
+                  , txOuts = map (uncurry makeTxOut) payouts ++
+                             [ TxOut @CtxTx owner (valueIn <> negateValue (lovelaceToValue fee) <> negateValue (lovelaceToValue $ Lovelace amount) <> lovelaceToValue minAda) (toTxContext datumIn) ref ]
                   , txFee = TxFeeExplicit fee
+                  , txValidityRange = (TxValidityLowerBound (posixTimeToSlotNo slotConfig from), TxValidityUpperBound (posixTimeToSlotNo slotConfig to))
+                  , txProtocolParams = C.BuildTxWith $ Just protocolParams
                   }
-          let bodyContent' = bodyContent { txProtocolParams = C.BuildTxWith $ Just protocolParams }
 
-          body <- first (mappend "makeTransactionBody:" . show) $ makeTransactionBody bodyContent'
-          -- let body' = body { txProtocolParams = C.BuildTxWith Nothing }
+          body <- first (mappend "makeTransactionBody: " . show) $ makeTransactionBody bodyContent
+
           let witnesses = [makeShelleyKeyWitness body (WitnessPaymentKey sk)]
           pure $ makeSignedTransaction witnesses body
 
@@ -655,7 +679,6 @@ initializeMarlowe contract (txin, TxOut owner valueIn datumIn ref) sk networkId 
   let state = M.emptyState (M.POSIXTime 0)
   let M.DatumInfo {..} = M.buildMarloweDatum params contract state
 
-  -- FIXME: replace buildValidator with custom implementation
   costModel <-
        maybe
         (fail "Missing default cost model.")
@@ -669,18 +692,19 @@ initializeMarlowe contract (txin, TxOut owner valueIn datumIn ref) sk networkId 
                       NoStakeAddress
 
   let fee = Lovelace 0
+  let minAda = Lovelace 0
 
-  let outs = payToScript (M.buildPayToScript viAddress (lovelaceToValue 2000000) diDatum) ++
+  let outs = payToScript (M.buildPayToScript viAddress (lovelaceToValue minAda) diDatum) ++
          [ TxOut @CtxTx
            owner
-           (valueIn <> negateValue (lovelaceToValue 2000000))
+           (valueIn <> negateValue (lovelaceToValue minAda))
            (toTxContext datumIn)
            ref
          ]
 
   let bodyContent =
         emptyTxBody
-          { txIns = map (,BuildTxWith $ KeyWitness KeyWitnessForSpending) [txin]
+          { txIns = [(txin, BuildTxWith $ KeyWitness KeyWitnessForSpending)]
           , txOuts = outs
           , txFee = TxFeeExplicit fee
           }
@@ -790,8 +814,8 @@ draw Client{sk} CardanoClient{networkId} s =
                   txt ("Head UTXO, total: " <> renderValue (balance @Tx utxo))
                     <=> padLeft (Pad 2) (drawUTxO utxo)
               ]
-              [ "[N]ew Transaction"
-              , "[M]arlowe Contract"
+              [ "[N]ew Marlowe Contract"
+              , "[M]arlowe Contract Input"
               , "[C]lose"
               , "[Q]uit"
               ]
@@ -995,38 +1019,50 @@ style _ =
 --
 -- NOTE(SN): At the end of the module because of TH
 
-runWithVty :: IO Vty -> Options -> IO State
-runWithVty buildVty options@Options{hydraNodeHost, cardanoNetworkId, cardanoNodeSocket} = do
+data Ext = Ext
+  { ppFile :: FilePath
+  , options :: Options
+  }
+
+parseExt :: Parser Ext
+parseExt = Ext <$> parsePPFile <*> parseOptions
+
+parsePPFile :: Parser FilePath
+parsePPFile =
+  strOption
+    (long "protocol-parameters"
+      <> metavar "FILE"
+      <> help "hydra protocol parameters"
+      <> value "protocol-parameters.json"
+      <> showDefault)
+
+runWithVty :: IO Vty -> Ext -> IO State
+runWithVty buildVty Ext{ppFile, options} = do
 
   let
     connection = C.LocalNodeConnectInfo
       { C.localConsensusModeParams = C.CardanoModeParams $ C.EpochSlots 21600
-      , localNodeNetworkId = cardanoNetworkId
-      , localNodeSocketPath = cardanoNodeSocket
+      , localNodeNetworkId = cardanoNetworkId options
+      , localNodeSocketPath = cardanoNodeSocket options
       }
-    q = C.QueryProtocolParameters
-  protocol <- C.queryNodeLocalState  connection Nothing (C.QueryInEra BabbageEraInCardanoMode (C.QueryInShelleyBasedEra C.ShelleyBasedEraBabbage q))
-  protocolParameters <- case protocol of
-    Right (Right p) -> do
-      let
-        cardanoNodePV = CS.protocolParamProtocolVersion p
-        plutusPV = C.toPlutusProtocolVersion cardanoNodePV
 
-      when (plutusPV /= vasilPV) $ error $ "NOT VASIL? " <> show plutusPV
-      pure p
-    _ -> do
-      error "Unable to grab protocol"
+  pp <- B.readFile ppFile
+  let pParams = fromMaybe (error "Cannot read protocol parameters file") (decode pp)
 
-  let
-    initialState = Disconnected{nodeHost = hydraNodeHost, protocolParams = protocolParameters}
+  sc <- runExceptT $ runReaderT (M.querySlotConfig connection) (M.CliEnv C.ScriptDataInBabbageEra)
+  let slotConfig = either (error "Unable to retrieve slot config") id sc
 
+  slotNo <- queryTipSlotNo (cardanoNetworkId options) (cardanoNodeSocket options)
+
+  let initialState now = Disconnected{nodeHost = hydraNodeHost options, protocolParams = pParams, slotConfig = slotConfig, slotNo = slotNo}
 
   eventChan <- newBChan 10
   withAsync (timer eventChan) $ \_ ->
     -- REVIEW(SN): what happens if callback blocks?
     withClient @Tx options (writeBChan eventChan) $ \client -> do
       initialVty <- buildVty
-      customMain initialVty buildVty (Just eventChan) (app client) initialState
+      now <- getCurrentTime
+      customMain initialVty buildVty (Just eventChan) (app client) (initialState now)
  where
   app client =
     App
@@ -1038,11 +1074,12 @@ runWithVty buildVty options@Options{hydraNodeHost, cardanoNetworkId, cardanoNode
       }
 
 
-  cardanoClient = mkCardanoClient cardanoNetworkId cardanoNodeSocket
+  cardanoClient = mkCardanoClient (cardanoNetworkId options) (cardanoNodeSocket options)
 
   timer chan = forever $ do
-    writeBChan chan Tick
+    now <- getCurrentTime
+    writeBChan chan $ Tick now
     threadDelay 1
 
-run :: Options -> IO State
+run :: Ext -> IO State
 run = runWithVty (mkVty defaultConfig)
