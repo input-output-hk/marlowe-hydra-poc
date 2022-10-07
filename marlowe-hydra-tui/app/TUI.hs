@@ -72,9 +72,11 @@ import Lens.Micro (Lens', lens, (%~), (.~), (?~), (^.), (^?))
 import Lens.Micro.TH (makeLensesFor)
 import qualified Language.Marlowe as M
 import qualified Language.Marlowe.Scripts as M
+import qualified Language.Marlowe.Core.V1.Semantics.Types.Address as M
 import qualified Language.Marlowe.Extended.V1 as M (ada)
 import qualified Language.Marlowe.Client as M
 import qualified Language.Marlowe.CLI.Types as M
+import qualified Language.Marlowe.CLI.Run as M
 import qualified Language.Marlowe.CLI.Export as M
 import qualified Language.Marlowe.CLI.Transaction as M
 import Language.Marlowe.CLI.Types (ValidatorInfo(viAddress))
@@ -84,12 +86,14 @@ import qualified Ledger.Tx as LedgerTx
 import qualified Cardano.Api as Script
 import Cardano.Crypto.Hash (hashToBytes)
 import Ledger.Address (PaymentPubKeyHash (..))
-import Ledger.Tx.CardanoAPI (toCardanoPaymentKeyHash, toCardanoValue, toCardanoTxInWitness, fromCardanoTxOutDatum)
+import Ledger.Tx.CardanoAPI (toCardanoPaymentKeyHash, toCardanoValue, toCardanoTxInWitness, fromCardanoTxOutDatum, toCardanoAddressInEra)
 import Ledger.Typed.Scripts (validatorScript)
 import PlutusCore (defaultCostModelParams)
 import Plutus.V2.Ledger.Api (fromData, toData, Redeemer(..))
 import Plutus.V1.Ledger.SlotConfig (SlotConfig (..), posixTimeToEnclosingSlot, slotToBeginPOSIXTime, slotToEndPOSIXTime)
 import Plutus.V1.Ledger.ProtocolVersions (vasilPV)
+import qualified Plutus.V1.Ledger.Value as Value
+import Plutus.V1.Ledger.Address (pubKeyHashAddress)
 
 -- TODO(SN): hardcoded contestation period used by the tui
 tuiContestationPeriod :: ContestationPeriod
@@ -466,7 +470,7 @@ handleNewTxEvent Client{sendInput, sk} CardanoClient{networkId} s = case s ^? he
     submit s' amount = do
 
       -- FIXME: Change contract
-      let accountId = M.PK $ toPlutusKeyHash . verificationKeyHash $ getVerificationKey sk
+      let accountId = M.Address M.testnet $ pubKeyHashAddress $ toPlutusKeyHash . verificationKeyHash $ getVerificationKey sk
       let contract = M.When [ M.Case (M.Deposit accountId accountId M.ada (M.Constant amount)) M.Close ] (M.POSIXTime 4820114293000) M.Close -- TODO
       case initializeMarlowe contract input sk networkId of
         Left e -> continue $ s' & warn ("Failed to construct tx, contact @_ktorz_ on twitter: " <> show e)
@@ -591,7 +595,7 @@ runMarlowe ::
 runMarlowe (txin, TxOut owner valueIn datumIn ref) (txin'', _) (txin', TxOut owner' valueIn' datumIn' ref') sk networkId protocolParams slotConfig (SlotNo slotNo) amount = do
 
       -- construct Marlowe input
-      let accountId = M.PK $ toPlutusKeyHash . verificationKeyHash $ getVerificationKey sk
+      let accountId = M.Address M.testnet $ pubKeyHashAddress $ toPlutusKeyHash . verificationKeyHash $ getVerificationKey sk
       let normalInput = M.NormalInput $ M.IDeposit accountId accountId M.ada amount
 
       MarloweOut {..} <- note "Unable to find Marlowe" $ classifyOutput (txin',
@@ -610,14 +614,12 @@ runMarlowe (txin, TxOut owner valueIn datumIn ref) (txin'', _) (txin', TxOut own
       case M.computeTransaction ti marloweState marloweContract of
         M.Error msg -> Left $ show msg
         M.TransactionOutput{..} -> do
-          let payments = [(payee, money) | M.Payment _ payee money <- txOutPayments]
+          let payments = [(payee, Value.singleton cur name money) | M.Payment _ payee (M.Token cur name) money <- txOutPayments]
           let payouts = mapMaybe f payments
-                          where f (M.Party (M.PK pkh), money) = hush $
-                                      do address <- makeShelleyAddressInEra networkId
-                                               <$> (PaymentCredentialByKey <$> toCardanoPaymentKeyHash (PaymentPubKeyHash pkh))
-                                               <*> pure NoStakeAddress
-                                         money <- toCardanoValue money
-                                         pure  (address, money)
+                          where f (M.Party (M.Address _ address), money) = hush $
+                                      do m <- toCardanoValue money
+                                         a <- toCardanoAddressInEra (Testnet (NetworkMagic 42)) address
+                                         pure (a, m)
                                 f _ = Nothing
 
           costModel <-
@@ -892,7 +894,7 @@ draw Client{sk} CardanoClient{networkId} s =
 
   withCommands panel cmds =
     hBox
-      [ hLimit 70 (vBox panel)
+      [ hLimit 150 (vBox panel)
       , vBorder
       , padLeftRight 1 $ vBox (str <$> cmds)
       ]
