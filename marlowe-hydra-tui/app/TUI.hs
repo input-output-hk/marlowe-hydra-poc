@@ -206,8 +206,13 @@ report typ msg = feedbackL ?~ UserFeedback typ msg
 --
 
 clearFeedback :: State -> State
--- clearFeedback = feedbackL .~ empty
-clearFeedback = id -- FIXME: revert
+clearFeedback = feedbackL .~ empty
+
+renderUTxO' :: (TxIn, TxOut ctx) -> Text
+renderUTxO' (k, TxOut _ val dat _) = Text.drop 54 (renderTxIn k) <> " ↦ " <> renderValue val <>
+  case dat of
+    TxOutDatumInline d -> maybe mempty (show . M.pretty) (M.marloweContract <$> ((fromData $ toPlutusData d) :: Maybe M.MarloweData))
+    _ -> ""
 
 handleEvent ::
   Client Tx IO ->
@@ -870,7 +875,7 @@ draw Client{sk} CardanoClient{networkId} s =
           [ padTop (Pad 1) $
             vBox
               [ drawAddress addr
-              , padLeft (Pad 2) $ vBox (str . toString . UTxO.render <$> u)
+              , padLeft (Pad 2) $ vBox (str . toString . renderUTxO' <$> u)
               ]
           | (addr, u) <- Map.toList byAddress
           ]
@@ -946,7 +951,7 @@ utxoCheckboxField u =
   [ checkboxField
     (checkboxLens k)
     ("checkboxField@" <> show k)
-    (UTxO.render (k, v))
+    (renderUTxO' (k, v))
   | (k, v) <- Map.toList u
   ]
  where
@@ -967,7 +972,7 @@ utxoRadioField ::
 utxoRadioField u =
   [ radioField
       (lens id seq)
-      [ (i, show i, UTxO.render i)
+      [ (i, show i, renderUTxO' i)
       | i <- Map.toList u
       ]
   ]
