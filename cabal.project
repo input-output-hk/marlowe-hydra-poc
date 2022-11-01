@@ -92,8 +92,8 @@ package plutus-core
 source-repository-package
   type: git
   location: https://github.com/input-output-hk/marlowe-cardano
-  tag: cd39df97c87ed9612003ed95fd3faf3d9c7d3ea4
-  --sha256: 0nx56drnq44fwfcwqb6jyr5fwivqpinmq12xcbplnhpxkphy66f4
+  tag: b1b5d77e3fc78caa9fd67106e49c97ebc49438ec
+  --sha256: 1lc4rlvvxm2p9xsn676bkk6vaw54i3y7wpdyqd9zhdmhsgxa84n8
   subdir:
     libs/aeson-via-serialise
     libs/base16-aeson
