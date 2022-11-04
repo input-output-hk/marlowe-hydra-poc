@@ -213,7 +213,7 @@ clearFeedback :: State -> State
 clearFeedback = feedbackL .~ empty
 
 renderUTxO' :: (TxIn, TxOut ctx) -> Text
-renderUTxO' (k, TxOut _ val dat _) = Text.drop 54 (renderTxIn k) <> " ↦ " <> renderValue val <>
+renderUTxO' (k, TxOut _ val dat _) = Text.drop 54 (renderTxIn k) <> " - " <> renderValue val <>
   case dat of
     TxOutDatumInline d -> maybe mempty (show . M.pretty) (M.marloweContract <$> ((fromData $ toPlutusData d) :: Maybe M.MarloweData))
     _ -> ""
@@ -471,7 +471,8 @@ handleNewTxEvent Client{sendInput, sk} CardanoClient{networkId} s = case s ^? he
 
       -- FIXME: Change contract
       let accountId = M.Address M.testnet $ pubKeyHashAddress $ toPlutusKeyHash . verificationKeyHash $ getVerificationKey sk
-      let contract = M.When [ M.Case (M.Deposit accountId accountId M.ada (M.Constant amount)) M.Close ] (M.POSIXTime 4820114293000) M.Close -- TODO
+      let to = slotToEndPOSIXTime (slotConfig s) (fromIntegral (unSlotNo (slotNo s) * 3600)) + 600000
+      let contract = M.When [ M.Case (M.Deposit accountId accountId M.ada (M.Constant amount)) M.Close ] to M.Close
       case initializeMarlowe contract input sk networkId of
         Left e -> continue $ s' & warn ("Failed to construct tx, contact @_ktorz_ on twitter: " <> show e)
         Right tx -> do
