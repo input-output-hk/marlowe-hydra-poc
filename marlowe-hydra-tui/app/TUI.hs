@@ -210,7 +210,7 @@ report typ msg = feedbackL ?~ UserFeedback typ msg
 --
 
 clearFeedback :: State -> State
-clearFeedback = feedbackL .~ empty
+clearFeedback = id -- feedbackL .~ empty
 
 renderUTxO' :: (TxIn, TxOut ctx) -> Text
 renderUTxO' (k, TxOut _ val dat _) = Text.drop 54 (renderTxIn k) <> " - " <> renderValue val <>
@@ -469,10 +469,14 @@ handleNewTxEvent Client{sendInput, sk} CardanoClient{networkId} s = case s ^? he
 
     submit s' amount = do
 
-      -- FIXME: Change contract
       let accountId = M.Address M.testnet $ pubKeyHashAddress $ toPlutusKeyHash . verificationKeyHash $ getVerificationKey sk
       let to = slotToEndPOSIXTime (slotConfig s) (fromIntegral (unSlotNo (slotNo s) * 3600)) + 600000
-      let contract = M.When [ M.Case (M.Deposit accountId accountId M.ada (M.Constant amount)) M.Close ] to M.Close
+      let bob = "addr_test1vqg9ywrpx6e50uam03nlu0ewunh3yrscxmjayurmkp52lfskgkq5k"
+      let contract =
+              M.When [ M.Case (M.Deposit accountId accountId M.ada (M.Constant amount))
+                     ( M.When [ M.Case (M.Deposit bob bob M.ada (M.Constant amount)) M.Close ] to M.Close)
+                     ] (to+600000) M.Close
+      -- let contract = M.When [ M.Case (M.Deposit accountId accountId M.ada (M.Constant amount)) M.Close ] to M.Close
       case initializeMarlowe contract input sk networkId of
         Left e -> continue $ s' & warn ("Failed to construct tx, contact @_ktorz_ on twitter: " <> show e)
         Right tx -> do
@@ -615,6 +619,21 @@ runMarlowe (txin, TxOut owner valueIn datumIn ref) (txin'', _) (txin', TxOut own
       case M.computeTransaction ti marloweState marloweContract of
         M.Error msg -> Left $ show msg
         M.TransactionOutput{..} -> do
+          let fee = Lovelace 1000000 -- TODO
+          let minAda = Lovelace 0
+
+          costModel <-
+             maybe
+              (fail "Missing default cost model.")
+              pure
+              defaultCostModelParams
+
+          M.ValidatorInfo {..} <- first M.unCliError $ M.marloweValidatorInfo
+                      ScriptDataInBabbageEra
+                      vasilPV
+                      costModel
+                      networkId
+                      NoStakeAddress
           let payments = [(payee, Value.singleton cur name money) | M.Payment _ payee (M.Token cur name) money <- txOutPayments]
           let payouts = mapMaybe f payments
                           where f (M.Party (M.Address _ address), money) = hush $
@@ -622,6 +641,14 @@ runMarlowe (txin, TxOut owner valueIn datumIn ref) (txin'', _) (txin', TxOut own
                                          a <- toCardanoAddressInEra (Testnet (NetworkMagic 42)) address
                                          pure (a, m)
                                 f _ = Nothing
+
+          let params = M.defaultMarloweParams
+          let M.DatumInfo {..} = M.buildMarloweDatum params txOutContract txOutState
+          let marloweOuts = case txOutContract of
+                              M.Close -> []
+                              _ -> do let accs = M.totalBalance $ M.accounts txOutState
+                                      payToScript (M.buildPayToScript viAddress (fromRight mempty $ toCardanoValue accs) diDatum)
+                                      -- payToScript (M.buildPayToScript viAddress (lovelaceToValue 10000000) diDatum)
 
           costModel <-
                maybe
@@ -651,9 +678,6 @@ runMarlowe (txin, TxOut owner valueIn datumIn ref) (txin'', _) (txin', TxOut own
                   (fromPlutusData $ toData riRedeemer)
                   maxExecutionUnits -- TODO
 
-          let fee = Lovelace 1000000 -- TODO
-          let minAda = Lovelace 0
-
           let bodyContent =
                 addExtraRequiredSigners [verificationKeyHash $ getVerificationKey sk]
                 emptyTxBody
@@ -661,7 +685,7 @@ runMarlowe (txin, TxOut owner valueIn datumIn ref) (txin'', _) (txin', TxOut own
                             , (txin, BuildTxWith $ KeyWitness KeyWitnessForSpending)
                             ]
                   , txInsCollateral = TxInsCollateral [txin'']
-                  , txOuts = map (uncurry makeTxOut) payouts ++
+                  , txOuts = map (uncurry makeTxOut) payouts ++ marloweOuts ++
                              [ TxOut @CtxTx owner (valueIn <> negateValue (lovelaceToValue fee) <> negateValue (lovelaceToValue $ Lovelace amount) <> lovelaceToValue minAda) (toTxContext datumIn) ref ]
                   , txFee = TxFeeExplicit fee
                   , txValidityRange = (TxValidityLowerBound (posixTimeToSlotNo slotConfig from), TxValidityUpperBound (posixTimeToSlotNo slotConfig to))
